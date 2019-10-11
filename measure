@@ -523,7 +523,7 @@ class L(Measure):
             os.unlink('locust_out_requests.csv')
         except FileNotFoundError:
             pass
-        self._run_l_progress(cmd, t_limit, prog_start, prog_coefficient)
+        self._run_l_progress(cmd, 10000000, t_limit, prog_start, prog_coefficient)
 
         # parse results:  time taken excludes any warmup time (this can be changed)
         # time_taken = None
