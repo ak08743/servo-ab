@@ -8,44 +8,184 @@ import time
 import subprocess
 import re
 import json
+import csv
+import statistics
+
+from jinja2 import Template
 
 from threading import Timer
 
-DESC="Apache Benchmark measure driver for Opsani Optune"
-VERSION="1.0.0"
-HAS_CANCEL=True
-PROGRESS_INTERVAL=30
+DESC = "Locust limited measure driver for Opsani Optune"
+VERSION = "0.0.1"
+HAS_CANCEL = False
+PROGRESS_INTERVAL = 30
 
 DFLT_LOAD_CFG = {
-    'n_threads'     : 10,
-    'n_requests'    : 10000000,   # request limit
-    't_limit'       : 180,         # time limit in seconds:   0 => no time limit
-    't_warmup'      :  30,         # warmup time in seconds:  0 => no warmup
-    'user'          : '',
-    'password'      : '',
-    'headers'       : [],
+    # 'n_threads'     : 10,
+    # 'n_requests'    : 10000000,   # request limit
+    # 't_limit'       : 180,         # time limit in seconds:   0 => no time limit
+    # 't_warmup'      :  30,         # warmup time in seconds:  0 => no warmup
+    # 'user'          : '',
+    # 'password'      : '',
+    # 'headers'       : [],
+    'n_clients': 2000,        # Number of simultaneous clients
+    'hatch_rate': 200,        # Clients hatch rate (# of clients per second added till n_clients is reached
+    'n_requests': 10000000,  # request limit
+    't_limit': 180,           # time limit in seconds:   0 => no time limit
+    'client_min_wait': 100,   # Min wait time between requests for client
+    'client_max_wait': 1000   # Max wait time between requests for client
 }
+
+# METRICS = {
+#     #FIXME: name metric names good identifiers (no spaces/special chars)
+#     'requests throughput': {
+#         'unit': 'requests/second',
+#     },
+#     'time taken': {
+#         'unit': 'seconds',
+#     },
+#     'number of errors': {
+#         'unit': 'count',
+#     },
+#     'time per request (across all concurrent requests)': {
+#         'unit': 'milliseconds',
+#     },
+#     'time per request': {
+#         'unit': 'milliseconds',
+#     },
+# }
 
 METRICS = {
-    #FIXME: name metric names good identifiers (no spaces/special chars)
-    'requests throughput': {
-        'unit': 'requests/second',
-    },
-    'time taken': {
-        'unit': 'seconds',
-    },
-    'number of errors': {
-        'unit': 'count',
-    },
-    'time per request (across all concurrent requests)': {
-        'unit': 'milliseconds',
-    },
-    'time per request': {
-        'unit': 'milliseconds',
-    },
+    'clients_concurrency': {'unit': 'count'},
+    'clients_min_delay': {'unit': 'milliseconds'},
+    'clients_max_delay': {'unit': 'milliseconds'},
+    'get_root_requests_total': {'unit': 'count'},
+    'get_root_requests_failures': {'unit': 'count'},
+    'get_root_requests_median_response_time': {'unit': 'milliseconds'},
+    'get_root_requests_average_response_time': {'unit': 'milliseconds'},
+    'get_root_requests_minimum_response_time': {'unit': 'milliseconds'},
+    'get_root_requests_maximum_response_time': {'unit': 'milliseconds'},
+    'get_root_requests_rps': {'unit': 'requests/second'},
+    'get_cart_requests_total': {'unit': 'count'},
+    'get_cart_requests_failures': {'unit': 'count'},
+    'get_cart_requests_median_response_time': {'unit': 'milliseconds'},
+    'get_cart_requests_average_response_time': {'unit': 'milliseconds'},
+    'get_cart_requests_minimum_response_time': {'unit': 'milliseconds'},
+    'get_cart_requests_maximum_response_time': {'unit': 'milliseconds'},
+    'get_cart_requests_rps': {'unit': 'requests/second'},
+    'post_cart_requests_total': {'unit': 'count'},
+    'post_cart_requests_failures': {'unit': 'count'},
+    'post_cart_requests_median_response_time': {'unit': 'milliseconds'},
+    'post_cart_requests_average_response_time': {'unit': 'milliseconds'},
+    'post_cart_requests_minimum_response_time': {'unit': 'milliseconds'},
+    'post_cart_requests_maximum_response_time': {'unit': 'milliseconds'},
+    'post_cart_requests_rps': {'unit': 'requests/second'},
+    'get_products_requests_total': {'unit': 'count'},
+    'get_products_requests_failures': {'unit': 'count'},
+    'get_products_requests_median_response_time': {'unit': 'milliseconds'},
+    'get_products_requests_average_response_time': {'unit': 'milliseconds'},
+    'get_products_requests_minimum_response_time': {'unit': 'milliseconds'},
+    'get_products_requests_maximum_response_time': {'unit': 'milliseconds'},
+    'get_products_requests_rps': {'unit': 'requests/second'},
+    'post_setcurrency_requests_total': {'unit': 'count'},
+    'post_setcurrency_requests_failures': {'unit': 'count'},
+    'post_setcurrency_requests_median_response_time': {'unit': 'milliseconds'},
+    'post_setcurrency_requests_average_response_time': {'unit': 'milliseconds'},
+    'post_setcurrency_requests_minimum_response_time': {'unit': 'milliseconds'},
+    'post_setcurrency_requests_maximum_response_time': {'unit': 'milliseconds'},
+    'post_setcurrency_requests_rps': {'unit': 'requests/second'},
+    'total_requests_total': {'unit': 'count'},
+    'total_requests_failures': {'unit': 'count'},
+    'total_requests_median_response_time': {'unit': 'milliseconds'},
+    'total_requests_average_response_time': {'unit': 'milliseconds'},
+    'total_requests_minimum_response_time': {'unit': 'milliseconds'},
+    'total_requests_maximum_response_time': {'unit': 'milliseconds'},
+    'total_requests_rps': {'unit': 'requests/second'},
+    'get_root_percentile_50': {'unit': 'millisecond'},
+    'get_root_percentile_66': {'unit': 'millisecond'},
+    'get_root_percentile_75': {'unit': 'millisecond'},
+    'get_root_percentile_80': {'unit': 'millisecond'},
+    'get_root_percentile_90': {'unit': 'millisecond'},
+    'get_root_percentile_95': {'unit': 'millisecond'},
+    'get_root_percentile_98': {'unit': 'millisecond'},
+    'get_root_percentile_99': {'unit': 'millisecond'},
+    'get_root_percentile_100': {'unit': 'millisecond'},
+    'get_cart_percentile_50': {'unit': 'millisecond'},
+    'get_cart_percentile_66': {'unit': 'millisecond'},
+    'get_cart_percentile_75': {'unit': 'millisecond'},
+    'get_cart_percentile_80': {'unit': 'millisecond'},
+    'get_cart_percentile_90': {'unit': 'millisecond'},
+    'get_cart_percentile_95': {'unit': 'millisecond'},
+    'get_cart_percentile_98': {'unit': 'millisecond'},
+    'get_cart_percentile_99': {'unit': 'millisecond'},
+    'get_cart_percentile_100': {'unit': 'millisecond'},
+    'post_cart_percentile_50': {'unit': 'millisecond'},
+    'post_cart_percentile_66': {'unit': 'millisecond'},
+    'post_cart_percentile_75': {'unit': 'millisecond'},
+    'post_cart_percentile_80': {'unit': 'millisecond'},
+    'post_cart_percentile_90': {'unit': 'millisecond'},
+    'post_cart_percentile_95': {'unit': 'millisecond'},
+    'post_cart_percentile_98': {'unit': 'millisecond'},
+    'post_cart_percentile_99': {'unit': 'millisecond'},
+    'post_cart_percentile_100': {'unit': 'millisecond'},
+    'post_checkout_percentile_50': {'unit': 'millisecond'},
+    'post_checkout_percentile_66': {'unit': 'millisecond'},
+    'post_checkout_percentile_75': {'unit': 'millisecond'},
+    'post_checkout_percentile_80': {'unit': 'millisecond'},
+    'post_checkout_percentile_90': {'unit': 'millisecond'},
+    'post_checkout_percentile_95': {'unit': 'millisecond'},
+    'post_checkout_percentile_98': {'unit': 'millisecond'},
+    'post_checkout_percentile_99': {'unit': 'millisecond'},
+    'post_checkout_percentile_100': {'unit': 'millisecond'},
+    'get_products_percentile_50': {'unit': 'millisecond'},
+    'get_products_percentile_66': {'unit': 'millisecond'},
+    'get_products_percentile_75': {'unit': 'millisecond'},
+    'get_products_percentile_80': {'unit': 'millisecond'},
+    'get_products_percentile_90': {'unit': 'millisecond'},
+    'get_products_percentile_95': {'unit': 'millisecond'},
+    'get_products_percentile_98': {'unit': 'millisecond'},
+    'get_products_percentile_99': {'unit': 'millisecond'},
+    'get_products_percentile_100': {'unit': 'millisecond'},
+    'post_setcurrency_percentile_50': {'unit': 'millisecond'},
+    'post_setcurrency_percentile_66': {'unit': 'millisecond'},
+    'post_setcurrency_percentile_75': {'unit': 'millisecond'},
+    'post_setcurrency_percentile_80': {'unit': 'millisecond'},
+    'post_setcurrency_percentile_90': {'unit': 'millisecond'},
+    'post_setcurrency_percentile_95': {'unit': 'millisecond'},
+    'post_setcurrency_percentile_98': {'unit': 'millisecond'},
+    'post_setcurrency_percentile_99': {'unit': 'millisecond'},
+    'post_setcurrency_percentile_100': {'unit': 'millisecond'},
+    'total_percentile_50': {'unit': 'millisecond'},
+    'total_percentile_66': {'unit': 'millisecond'},
+    'total_percentile_75': {'unit': 'millisecond'},
+    'total_percentile_80': {'unit': 'millisecond'},
+    'total_percentile_90': {'unit': 'millisecond'},
+    'total_percentile_95': {'unit': 'millisecond'},
+    'total_percentile_98': {'unit': 'millisecond'},
+    'total_percentile_99': {'unit': 'millisecond'},
+    'total_percentile_100': {'unit': 'millisecond'}
 }
 
-class AB(Measure):
+METRICS_MAP = {
+    'GET /': 'get_root',
+    'GET /cart': 'get_cart',
+    'POST /cart': 'post_cart',
+    'POST /cart/checkout': 'post_checkout',
+    'POST /setCurrency': 'post_setcurrency',
+    'Total': 'total'
+}
+
+PERCENTILE_LIST = ['100', '50', '66', '75', '80', '90', '95', '98', '99']
+COUNTERS_MAP = {
+    'average_response_time': 'Average response time',
+    'failures': '# failures',
+    'maximum_response_time': 'Max response time',
+    'median_response_time': 'Median response time',
+    'minimum_response_time': 'Min response time',
+    'rps': 'Requests/s',
+    'total': '# requests'}
+
+class L(Measure):
     # def __init__(self, version, cli_desc, supports_cancel, progress_interval):
     #     super().__init__(version, cli_desc, supports_cancel, progress_interval)
 
@@ -72,31 +212,243 @@ class AB(Measure):
             raise Exception('Invalid control configuration format in input')
 
         # update the config dictionary with the test URL
-        load_cfg['test_url'] = os.environ.get('AB_TEST_URL')
+        load_cfg['test_url'] = 'http://' + os.environ.get('FRONTEND_ADDR', 'frontend:80')
         # update the config dictionary with any headers, split into a list on comma
-        if os.environ.get('AB_HEADERS'):
-            load_cfg['headers'] = json.loads(os.environ.get('AB_HEADERS'))
+        # if os.environ.get('AB_HEADERS'):
+        #     load_cfg['headers'] = json.loads(os.environ.get('AB_HEADERS'))
         load_cfg.update(load) # will override test_url and headers if provided in load
         if not load_cfg['test_url']:
             raise Exception('Load configuration is missing a test_url')
 
-        result, command = self._run_ab(
+        # Generate locust file here from template
+        self._generate_locust_config(load_cfg)
+
+        result, command = self._run_locust(
             test_url      = load_cfg['test_url'],
-            headers       = load_cfg['headers'],
-            n_threads     = load_cfg['n_threads'],
+            test_scenario = 'locustfile.py',
+            n_clients     = load_cfg['n_clients'],
+            hatch_rate    = load_cfg['hatch_rate'],
             n_requests    = load_cfg['n_requests'],
-            t_limit       = load_cfg['t_limit'],
-            t_warmup      = load_cfg['t_warmup'],
-            user          = load_cfg['user'],
-            password      = load_cfg['password'],
+            t_limit       = load_cfg['t_limit']
             )
 
-        metrics = {}
+        _metrics = {
+            'clients_concurrency': load_cfg['n_clients'],
+            'clients_min_delay': load_cfg['client_min_wait'],
+            'clients_max_delay': load_cfg['client_max_wait'],
+            'get_root_requests_total': None,
+            'get_root_requests_failures': None,
+            'get_root_requests_median_response_time': None,
+            'get_root_requests_average_response_time': None,
+            'get_root_requests_minimum_response_time': None,
+            'get_root_requests_maximum_response_time': None,
+            'get_root_requests_rps': None,
+            'get_cart_requests_total': None,
+            'get_cart_requests_failures': None,
+            'get_cart_requests_median_response_time': None,
+            'get_cart_requests_average_response_time': None,
+            'get_cart_requests_minimum_response_time': None,
+            'get_cart_requests_maximum_response_time': None,
+            'get_cart_requests_rps': None,
+            'post_cart_requests_total': None,
+            'post_cart_requests_failures': None,
+            'post_cart_requests_median_response_time': None,
+            'post_cart_requests_average_response_time': None,
+            'post_cart_requests_minimum_response_time': None,
+            'post_cart_requests_maximum_response_time': None,
+            'post_cart_requests_rps': None,
+            'get_products_requests_total': None,
+            'get_products_requests_failures': None,
+            'get_products_requests_median_response_time': None,
+            'get_products_requests_average_response_time': None,
+            'get_products_requests_minimum_response_time': None,
+            'get_products_requests_maximum_response_time': None,
+            'get_products_requests_rps': None,
+            'post_setcurrency_requests_total': None,
+            'post_setcurrency_requests_failures': None,
+            'post_setcurrency_requests_median_response_time': None,
+            'post_setcurrency_requests_average_response_time': None,
+            'post_setcurrency_requests_minimum_response_time': None,
+            'post_setcurrency_requests_maximum_response_time': None,
+            'post_setcurrency_requests_rps': None,
+            'total_requests_total': None,
+            'total_requests_failures': None,
+            'total_requests_median_response_time': None,
+            'total_requests_average_response_time': None,
+            'total_requests_minimum_response_time': None,
+            'total_requests_maximum_response_time': None,
+            'total_requests_rps': None,
+            'get_root_percentile_50': None,
+            'get_root_percentile_66': None,
+            'get_root_percentile_75': None,
+            'get_root_percentile_80': None,
+            'get_root_percentile_90': None,
+            'get_root_percentile_95': None,
+            'get_root_percentile_98': None,
+            'get_root_percentile_99': None,
+            'get_root_percentile_100': None,
+            'get_cart_percentile_50': None,
+            'get_cart_percentile_66': None,
+            'get_cart_percentile_75': None,
+            'get_cart_percentile_80': None,
+            'get_cart_percentile_90': None,
+            'get_cart_percentile_95': None,
+            'get_cart_percentile_98': None,
+            'get_cart_percentile_99': None,
+            'get_cart_percentile_100': None,
+            'post_cart_percentile_50': None,
+            'post_cart_percentile_66': None,
+            'post_cart_percentile_75': None,
+            'post_cart_percentile_80': None,
+            'post_cart_percentile_90': None,
+            'post_cart_percentile_95': None,
+            'post_cart_percentile_98': None,
+            'post_cart_percentile_99': None,
+            'post_cart_percentile_100': None,
+            'post_checkout_percentile_50': None,
+            'post_checkout_percentile_66': None,
+            'post_checkout_percentile_75': None,
+            'post_checkout_percentile_80': None,
+            'post_checkout_percentile_90': None,
+            'post_checkout_percentile_95': None,
+            'post_checkout_percentile_98': None,
+            'post_checkout_percentile_99': None,
+            'post_checkout_percentile_100': None,
+            'get_products_percentile_50': None,
+            'get_products_percentile_66': None,
+            'get_products_percentile_75': None,
+            'get_products_percentile_80': None,
+            'get_products_percentile_90': None,
+            'get_products_percentile_95': None,
+            'get_products_percentile_98': None,
+            'get_products_percentile_99': None,
+            'get_products_percentile_100': None,
+            'post_setcurrency_percentile_50': None,
+            'post_setcurrency_percentile_66': None,
+            'post_setcurrency_percentile_75': None,
+            'post_setcurrency_percentile_80': None,
+            'post_setcurrency_percentile_90': None,
+            'post_setcurrency_percentile_95': None,
+            'post_setcurrency_percentile_98': None,
+            'post_setcurrency_percentile_99': None,
+            'post_setcurrency_percentile_100': None,
+            'total_percentile_50': None,
+            'total_percentile_66': None,
+            'total_percentile_75': None,
+            'total_percentile_80': None,
+            'total_percentile_90': None,
+            'total_percentile_95': None,
+            'total_percentile_98': None,
+            'total_percentile_99': None,
+            'total_percentile_100': None
+        }
 
+        requests_distributions = {}
+        filename = 'locust_out_distribution.csv'
+        with open(filename, 'r') as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                requests_distributions_key = row['Name']
+                requests_distributions[requests_distributions_key] = {}
+                for key in row.keys():
+                    requests_distributions[requests_distributions_key][key] = row[key]
+
+        requests_stats = {}
+        filename = 'locust_out_requests.csv'
+        with open(filename, 'r') as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                requests_stats_key = row['Method'] + ' '
+                if requests_stats_key == 'None ': requests_stats_key = ''
+                requests_stats_key = requests_stats_key + row['Name']
+                requests_stats[requests_stats_key] = {}
+                for key in row.keys():
+                    requests_stats[requests_stats_key][key] = row[key]
+
+        # Fill metrics
+        for key in METRICS_MAP.keys():
+            # fill percentiles
+            for percentile in PERCENTILE_LIST:
+                _metrics[METRICS_MAP[key] + '_percentile_' + percentile] = \
+                    float(requests_distributions[key][percentile + '%'])
+            # fill url stats
+            for counter in COUNTERS_MAP.keys():
+                _metrics[METRICS_MAP[key] + '_requests_' + counter] = float(requests_stats[key][COUNTERS_MAP[counter]])
+
+        # Fill products (aggregated metrics)
+        for key in requests_distributions.keys():
+            if re.findall('/product/', key):
+                for percentile in PERCENTILE_LIST:
+                    if _metrics['get_products_percentile_' + percentile] is None:
+                        _metrics['get_products_percentile_' + percentile] = float(requests_distributions[key][percentile + '%'])
+                    else:
+                        _metrics['get_products_percentile_' + percentile] += float(requests_distributions[key][percentile + '%'])
+
+        # get_products_requests_average_response_time
+        n = 0
+        for key in requests_stats.keys():
+            if re.findall('/product/', key):
+                if _metrics['get_products_requests_average_response_time'] is None:
+                    _metrics['get_products_requests_average_response_time'] = float(requests_stats[key][COUNTERS_MAP['average_response_time']])
+                else:
+                    _metrics['get_products_requests_average_response_time'] = _metrics['get_products_requests_average_response_time'] + \
+                         (float(requests_stats[key][COUNTERS_MAP['average_response_time']]) - _metrics['get_products_requests_average_response_time']) / (n+1)
+                n += 1
+
+        # get_products_requests_failures
+        for key in requests_stats.keys():
+            if re.findall('/product/', key):
+                if _metrics['get_products_requests_failures'] is None:
+                    _metrics['get_products_requests_failures'] = int(requests_stats[key][COUNTERS_MAP['failures']])
+                else:
+                    _metrics['get_products_requests_failures'] += int(requests_stats[key][COUNTERS_MAP['failures']])
+
+        # get_products_requests_maximum_response_time
+        for key in requests_stats.keys():
+            if re.findall('/product/', key):
+                if _metrics['get_products_requests_maximum_response_time'] is None:
+                    _metrics['get_products_requests_maximum_response_time'] = int(requests_stats[key][COUNTERS_MAP['maximum_response_time']])
+                else:
+                    _metrics['get_products_requests_maximum_response_time'] = max(int(requests_stats[key][COUNTERS_MAP['maximum_response_time']]), _metrics['get_products_requests_maximum_response_time'])
+
+        # get_products_requests_minimum_response_time
+        for key in requests_stats.keys():
+            if re.findall('/product/', key):
+                if _metrics['get_products_requests_minimum_response_time'] is None:
+                    _metrics['get_products_requests_minimum_response_time'] = int(requests_stats[key][COUNTERS_MAP['minimum_response_time']])
+                else:
+                    _metrics['get_products_requests_minimum_response_time'] = min(int(requests_stats[key][COUNTERS_MAP['minimum_response_time']]), _metrics['get_products_requests_minimum_response_time'])
+
+        # get_products_requests_rps
+        for key in requests_stats.keys():
+            if re.findall('/product/', key):
+                if _metrics['get_products_requests_rps'] is None:
+                    _metrics['get_products_requests_rps'] = float(requests_stats[key][COUNTERS_MAP['rps']])
+                else:
+                    _metrics['get_products_requests_rps'] += float(requests_stats[key][COUNTERS_MAP['rps']])
+
+        # get_products_requests_total
+        for key in requests_stats.keys():
+            if re.findall('/product/', key):
+                if _metrics['get_products_requests_total'] is None:
+                    _metrics['get_products_requests_total'] = int(requests_stats[key][COUNTERS_MAP['total']])
+                else:
+                    _metrics['get_products_requests_total'] += int(requests_stats[key][COUNTERS_MAP['total']])
+
+        # get_products_requests_median_response_time
+        for key in requests_stats.keys():
+            if re.findall('/product/', key):
+                if _metrics['get_products_requests_median_response_time'] is None:
+                    _metrics['get_products_requests_median_response_time'] = [int(requests_stats[key][COUNTERS_MAP['median_response_time']])]
+                else:
+                    _metrics['get_products_requests_median_response_time'].append(int(requests_stats[key][COUNTERS_MAP['median_response_time']]))
+        _metrics['get_products_requests_median_response_time'] = statistics.median(_metrics['get_products_requests_median_response_time'])
+
+        metrics = {}
         # TODO: if metrics were passed on input, only return those
-        for metric_name in result.keys():
+        for metric_name in _metrics.keys():
             metrics[metric_name] = METRICS[metric_name].copy()
-            metrics[metric_name]['value'] = result[metric_name]
+            metrics[metric_name]['value'] = _metrics[metric_name]
 
         annotations = {
             'command': command,
@@ -104,115 +456,134 @@ class AB(Measure):
 
         return (metrics, annotations)
 
+    def _generate_locust_config(self, config):
+        with open('locustfile.py.j2') as f:
+            d = Template(f.read())
+
+        with open('locustfile.py', 'w') as f:
+            f.write(d.render(**config))
+
+
     # helper:  run apache benchmark measurement
-    def _run_ab(self, test_url, headers, n_threads, n_requests, t_limit, t_warmup, user, password):
+    def _run_locust(self, test_url, test_scenario, n_clients, hatch_rate, n_requests, t_limit):
 
-        # process input
-        if user or password:
-            auth=['-A', user + ':' + password]
-        else:
-            auth=[]
-        t_limit = int(t_limit)
-        t_warmup = int(t_warmup)
+        # # process input
+        # if user or password:
+        #     auth=['-A', user + ':' + password]
+        # else:
+        #     auth=[]
+        # t_limit = int(t_limit)
+        # t_warmup = int(t_warmup)
 
-        # execute warmup command, if any
+        # # execute warmup command, if any
+        # prog_coefficient = 1.0
+        # prog_start = 0.0
+        # if t_warmup > 0:
+        #
+        #     # set progress coefficient for warmup:  if not determinable from
+        #     # relative time limits, use 25% of overall progress for warmup
+        #     if t_limit > 0:
+        #         prog_coefficient = t_warmup / (t_warmup + t_limit)
+        #     else:
+        #         prog_coefficient = 0.25
+        #
+        #     # construct and run warmup command
+        #     n_warmup_requests = n_requests # assume warmup is less than duration requested
+        #     cmd = ['ab', '-l', '-c', str(n_threads)]
+        #     cmd.extend(['-t', str(t_warmup)])
+        #     cmd.extend(['-n', str(n_warmup_requests)])
+        #     if headers:
+        #         for header in headers:
+        #             cmd.extend(['-H', header])
+        #     cmd.extend(auth)
+        #     cmd.append(test_url)
+        #     self._run_ab_progress(cmd, n_warmup_requests, t_warmup, 0.0, prog_coefficient)
+        #
+        #     # set progress start and coefficient for succeeding measure command
+        #     prog_start = prog_coefficient * 100.0
+        #     prog_coefficient = 1.0 - prog_coefficient
         prog_coefficient = 1.0
         prog_start = 0.0
-        if t_warmup > 0:
 
-            # set progress coefficient for warmup:  if not determinable from
-            # relative time limits, use 25% of overall progress for warmup
-            if t_limit > 0:
-                prog_coefficient = t_warmup / (t_warmup + t_limit)
-            else:
-                prog_coefficient = 0.25
-
-            # construct and run warmup command
-            n_warmup_requests = n_requests # assume warmup is less than duration requested
-            cmd = ['ab', '-l', '-c', str(n_threads)]
-            cmd.extend(['-t', str(t_warmup)])
-            cmd.extend(['-n', str(n_warmup_requests)])
-            if headers:
-                for header in headers:
-                    cmd.extend(['-H', header])
-            cmd.extend(auth)
-            cmd.append(test_url)
-            self._run_ab_progress(cmd, n_warmup_requests, t_warmup, 0.0, prog_coefficient)
-
-            # set progress start and coefficient for succeeding measure command
-            prog_start = prog_coefficient * 100.0
-            prog_coefficient = 1.0 - prog_coefficient
 
         # construct and run measurement command
-        cmd = ['ab', '-l', '-c', str(n_threads)]
+        # cmd = ['ab', '-l', '-c', str(n_threads)]
+        cmd = ['locust', '-H', test_url, '-f', 'locustfile.py', '-c', str(n_clients), '-r', str(hatch_rate),
+               '--csv=locust_out', '--no-web', '--reset-stats']
         if t_limit > 0:
             cmd.extend(['-t', str(t_limit)])
-        cmd.extend(['-n', str(n_requests)])
-        if headers:
-            for header in headers:
-                cmd.extend(['-H', header])
-        cmd.extend(auth)
-        cmd.append(test_url)
-        self._run_ab_progress(cmd, n_requests, t_limit, prog_start, prog_coefficient)
+        # cmd.extend(['-n', str(n_requests)])
+        # if headers:
+        #     for header in headers:
+        #         cmd.extend(['-H', header])
+        # cmd.extend(auth)
+        # cmd.append(test_url)
+        try:
+            os.unlink('locust_out_distribution.csv')
+            os.unlink('locust_out_requests.csv')
+        except FileNotFoundError:
+            pass
+        self._run_l_progress(cmd, t_limit, prog_start, prog_coefficient)
 
         # parse results:  time taken excludes any warmup time (this can be changed)
-        time_taken = None
-        n_errors = None
-        rps = None
-        t_reqs = None
-        t_reqs_all = None
+        # time_taken = None
+        # n_errors = None
+        # rps = None
+        # t_reqs = None
+        # t_reqs_all = None
+        #
+        # for line in self.proc.stdout.read().decode().split('\n'):
+        #
+        #     m = re.search(r'Time taken for tests:\s+([\d\.]+)', line)
+        #     if m:
+        #         time_taken = float(m.group(1))
+        #         continue
+        #
+        #     m = re.search(r'Failed requests:\s+(\d+)', line)
+        #     if m:
+        #         n_errors = int(m.group(1))
+        #         continue
+        #
+        #     m = re.search(r'Requests per second:\s+([\d\.]+)', line)
+        #     if m:
+        #         rps = float(m.group(1))
+        #         continue
+        #
+        #     m = re.search(r'Time per request:\s+([\d\.]+).+\(mean\)', line)
+        #     if m:
+        #         t_reqs = float(m.group(1))
+        #         continue
+        #
+        #     m = re.search(r'Time per request:\s+([\d\.]+).+\(mean, across all concurrent requests\)', line)
+        #     if m:
+        #         t_reqs_all = float(m.group(1))
+        #         continue
+        #
+        # assert time_taken != None, \
+        #     "Failed to parse Apache Benchmark output: time taken"
+        # assert n_errors   != None, \
+        #     "Failed to parse Apache Benchmark output: number of errors"
+        # assert rps        != None, \
+        #     "Failed to parse Apache Benchmark output: requests per second"
+        # assert t_reqs_all != None, \
+        #     "Failed to parse Apache Benchmark output: time per req (all)"
+        # assert t_reqs     != None, \
+        #     "Failed to parse Apache Benchmark output: time per req"
 
-        for line in self.proc.stdout.read().decode().split('\n'):
-
-            m = re.search(r'Time taken for tests:\s+([\d\.]+)', line)
-            if m:
-                time_taken = float(m.group(1))
-                continue
-
-            m = re.search(r'Failed requests:\s+(\d+)', line)
-            if m:
-                n_errors = int(m.group(1))
-                continue
-
-            m = re.search(r'Requests per second:\s+([\d\.]+)', line)
-            if m:
-                rps = float(m.group(1))
-                continue
-
-            m = re.search(r'Time per request:\s+([\d\.]+).+\(mean\)', line)
-            if m:
-                t_reqs = float(m.group(1))
-                continue
-
-            m = re.search(r'Time per request:\s+([\d\.]+).+\(mean, across all concurrent requests\)', line)
-            if m:
-                t_reqs_all = float(m.group(1))
-                continue
-
-        assert time_taken != None, \
-            "Failed to parse Apache Benchmark output: time taken"
-        assert n_errors   != None, \
-            "Failed to parse Apache Benchmark output: number of errors"
-        assert rps        != None, \
-            "Failed to parse Apache Benchmark output: requests per second"
-        assert t_reqs_all != None, \
-            "Failed to parse Apache Benchmark output: time per req (all)"
-        assert t_reqs     != None, \
-            "Failed to parse Apache Benchmark output: time per req"
-
-        result = {
-            'requests throughput': rps,
-            'time taken': time_taken,
-            'number of errors': n_errors,
-            'time per request (across all concurrent requests)':  t_reqs_all,
-            'time per request': t_reqs,
-        }
+        # result = {
+        #     'requests throughput': rps,
+        #     'time taken': time_taken,
+        #     'number of errors': n_errors,
+        #     'time per request (across all concurrent requests)':  t_reqs_all,
+        #     'time per request': t_reqs,
+        # }
+        result = {}
 
         command = ' '.join(cmd)
         return (result, command)
 
     # helper:  execute apache benchmark command and print progress
-    def _run_ab_progress(self, cmd, n_requests, t_limit, prog_start, prog_coefficient):
+    def _run_l_progress(self, cmd, n_requests, t_limit, prog_start, prog_coefficient):
         self.debug("Running test command:", cmd)
         self.proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 
@@ -221,7 +592,7 @@ class AB(Measure):
         if t_limit > 0:
             t_start = time.time()
             t = repeatingTimer(5, self._update_timed_progress, t_start, t_limit,
-                prog_start, prog_coefficient)
+                               prog_start, prog_coefficient)
             t.start()
 
         # use try-and-finally to ensure the timer, if any, is canceled and does
@@ -236,12 +607,12 @@ class AB(Measure):
                     stderr.append(l)
 
                     # glean progress from stderr where measure is not time limited
-                    if t_limit <= 0:
-                        m = re.search(r'Completed (\d+) requests', l)
-                        if m:
-                            prog = min(100.0, 100.0 * int(m.group(1)) / n_requests)
-                            self.progress = min(100, int((prog_coefficient * prog) + prog_start))
-                            self.print_progress()
+                    # if t_limit <= 0:
+                    #     m = re.search(r'Completed (\d+) requests', l)
+                    #     if m:
+                    #         prog = min(100.0, 100.0 * int(m.group(1)) / n_requests)
+                    #         self.progress = min(100, int((prog_coefficient * prog) + prog_start))
+                    #         self.print_progress()
 
             return_code = self.proc.wait()
         except Exception as e:
@@ -252,7 +623,7 @@ class AB(Measure):
 
         if return_code != 0:
             self.debug("Command failed. Stderr:\n" + '\n'.join(stderr))
-            raise Exception("Failed to measure, Apache Benchmark failed with exit code: " + str(return_code))
+            raise Exception("Failed to measure, Locust failed with exit code: " + str(return_code))
 
     # helper:  update timer based progress
     def _update_timed_progress(self, t_start, t_limit, prog_start, prog_coefficient):
@@ -277,5 +648,5 @@ class repeatingTimer():
 
 
 if __name__ == '__main__':
-    ab = AB(VERSION, DESC, HAS_CANCEL, PROGRESS_INTERVAL)
-    ab.run()
+    l = L(VERSION, DESC, HAS_CANCEL, PROGRESS_INTERVAL)
+    l.run()
