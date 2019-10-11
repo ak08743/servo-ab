@@ -21,13 +21,6 @@ HAS_CANCEL = False
 PROGRESS_INTERVAL = 30
 
 DFLT_LOAD_CFG = {
-    # 'n_threads'     : 10,
-    # 'n_requests'    : 10000000,   # request limit
-    # 't_limit'       : 180,         # time limit in seconds:   0 => no time limit
-    # 't_warmup'      :  30,         # warmup time in seconds:  0 => no warmup
-    # 'user'          : '',
-    # 'password'      : '',
-    # 'headers'       : [],
     'n_clients': 2000,        # Number of simultaneous clients
     'hatch_rate': 200,        # Clients hatch rate (# of clients per second added till n_clients is reached
     'n_requests': 10000000,  # request limit
@@ -35,25 +28,6 @@ DFLT_LOAD_CFG = {
     'client_min_wait': 100,   # Min wait time between requests for client
     'client_max_wait': 1000   # Max wait time between requests for client
 }
-
-# METRICS = {
-#     #FIXME: name metric names good identifiers (no spaces/special chars)
-#     'requests throughput': {
-#         'unit': 'requests/second',
-#     },
-#     'time taken': {
-#         'unit': 'seconds',
-#     },
-#     'number of errors': {
-#         'unit': 'count',
-#     },
-#     'time per request (across all concurrent requests)': {
-#         'unit': 'milliseconds',
-#     },
-#     'time per request': {
-#         'unit': 'milliseconds',
-#     },
-# }
 
 METRICS = {
     'clients_concurrency': {'unit': 'count'},
@@ -369,11 +343,19 @@ class L(Measure):
         for key in METRICS_MAP.keys():
             # fill percentiles
             for percentile in PERCENTILE_LIST:
-                _metrics[METRICS_MAP[key] + '_percentile_' + percentile] = \
-                    float(requests_distributions[key][percentile + '%'])
+                index = METRICS_MAP[key] + '_percentile_' + percentile
+                try:
+                    _metrics[index] = float(requests_distributions[key][percentile + '%'])
+                except KeyError:
+                    _metrics[index] = None
+
             # fill url stats
             for counter in COUNTERS_MAP.keys():
-                _metrics[METRICS_MAP[key] + '_requests_' + counter] = float(requests_stats[key][COUNTERS_MAP[counter]])
+                index = METRICS_MAP[key] + '_requests_' + counter
+                try:
+                    _metrics[index] = float(requests_stats[key][COUNTERS_MAP[counter]])
+                except KeyError:
+                    _metrics[index] = None
 
         # Fill products (aggregated metrics)
         for key in requests_distributions.keys():
@@ -442,7 +424,8 @@ class L(Measure):
                     _metrics['get_products_requests_median_response_time'] = [int(requests_stats[key][COUNTERS_MAP['median_response_time']])]
                 else:
                     _metrics['get_products_requests_median_response_time'].append(int(requests_stats[key][COUNTERS_MAP['median_response_time']]))
-        _metrics['get_products_requests_median_response_time'] = statistics.median(_metrics['get_products_requests_median_response_time'])
+        if _metrics['get_products_requests_median_response_time'] is not None:
+            _metrics['get_products_requests_median_response_time'] = statistics.median(_metrics['get_products_requests_median_response_time'])
 
         metrics = {}
         # TODO: if metrics were passed on input, only return those
@@ -467,41 +450,6 @@ class L(Measure):
     # helper:  run apache benchmark measurement
     def _run_locust(self, test_url, test_scenario, n_clients, hatch_rate, n_requests, t_limit):
 
-        # # process input
-        # if user or password:
-        #     auth=['-A', user + ':' + password]
-        # else:
-        #     auth=[]
-        # t_limit = int(t_limit)
-        # t_warmup = int(t_warmup)
-
-        # # execute warmup command, if any
-        # prog_coefficient = 1.0
-        # prog_start = 0.0
-        # if t_warmup > 0:
-        #
-        #     # set progress coefficient for warmup:  if not determinable from
-        #     # relative time limits, use 25% of overall progress for warmup
-        #     if t_limit > 0:
-        #         prog_coefficient = t_warmup / (t_warmup + t_limit)
-        #     else:
-        #         prog_coefficient = 0.25
-        #
-        #     # construct and run warmup command
-        #     n_warmup_requests = n_requests # assume warmup is less than duration requested
-        #     cmd = ['ab', '-l', '-c', str(n_threads)]
-        #     cmd.extend(['-t', str(t_warmup)])
-        #     cmd.extend(['-n', str(n_warmup_requests)])
-        #     if headers:
-        #         for header in headers:
-        #             cmd.extend(['-H', header])
-        #     cmd.extend(auth)
-        #     cmd.append(test_url)
-        #     self._run_ab_progress(cmd, n_warmup_requests, t_warmup, 0.0, prog_coefficient)
-        #
-        #     # set progress start and coefficient for succeeding measure command
-        #     prog_start = prog_coefficient * 100.0
-        #     prog_coefficient = 1.0 - prog_coefficient
         prog_coefficient = 1.0
         prog_start = 0.0
 
@@ -512,12 +460,6 @@ class L(Measure):
                '--csv=locust_out', '--no-web', '--reset-stats']
         if t_limit > 0:
             cmd.extend(['-t', str(t_limit)])
-        # cmd.extend(['-n', str(n_requests)])
-        # if headers:
-        #     for header in headers:
-        #         cmd.extend(['-H', header])
-        # cmd.extend(auth)
-        # cmd.append(test_url)
         try:
             os.unlink('locust_out_distribution.csv')
             os.unlink('locust_out_requests.csv')
@@ -525,58 +467,6 @@ class L(Measure):
             pass
         self._run_l_progress(cmd, 10000000, t_limit, prog_start, prog_coefficient)
 
-        # parse results:  time taken excludes any warmup time (this can be changed)
-        # time_taken = None
-        # n_errors = None
-        # rps = None
-        # t_reqs = None
-        # t_reqs_all = None
-        #
-        # for line in self.proc.stdout.read().decode().split('\n'):
-        #
-        #     m = re.search(r'Time taken for tests:\s+([\d\.]+)', line)
-        #     if m:
-        #         time_taken = float(m.group(1))
-        #         continue
-        #
-        #     m = re.search(r'Failed requests:\s+(\d+)', line)
-        #     if m:
-        #         n_errors = int(m.group(1))
-        #         continue
-        #
-        #     m = re.search(r'Requests per second:\s+([\d\.]+)', line)
-        #     if m:
-        #         rps = float(m.group(1))
-        #         continue
-        #
-        #     m = re.search(r'Time per request:\s+([\d\.]+).+\(mean\)', line)
-        #     if m:
-        #         t_reqs = float(m.group(1))
-        #         continue
-        #
-        #     m = re.search(r'Time per request:\s+([\d\.]+).+\(mean, across all concurrent requests\)', line)
-        #     if m:
-        #         t_reqs_all = float(m.group(1))
-        #         continue
-        #
-        # assert time_taken != None, \
-        #     "Failed to parse Apache Benchmark output: time taken"
-        # assert n_errors   != None, \
-        #     "Failed to parse Apache Benchmark output: number of errors"
-        # assert rps        != None, \
-        #     "Failed to parse Apache Benchmark output: requests per second"
-        # assert t_reqs_all != None, \
-        #     "Failed to parse Apache Benchmark output: time per req (all)"
-        # assert t_reqs     != None, \
-        #     "Failed to parse Apache Benchmark output: time per req"
-
-        # result = {
-        #     'requests throughput': rps,
-        #     'time taken': time_taken,
-        #     'number of errors': n_errors,
-        #     'time per request (across all concurrent requests)':  t_reqs_all,
-        #     'time per request': t_reqs,
-        # }
         result = {}
 
         command = ' '.join(cmd)
@@ -606,14 +496,6 @@ class L(Measure):
                     l = line.decode().strip()
                     stderr.append(l)
 
-                    # glean progress from stderr where measure is not time limited
-                    # if t_limit <= 0:
-                    #     m = re.search(r'Completed (\d+) requests', l)
-                    #     if m:
-                    #         prog = min(100.0, 100.0 * int(m.group(1)) / n_requests)
-                    #         self.progress = min(100, int((prog_coefficient * prog) + prog_start))
-                    #         self.print_progress()
-
             return_code = self.proc.wait()
         except Exception as e:
             raise
@@ -621,9 +503,10 @@ class L(Measure):
             if t_limit > 0:
                 t.cancel()
 
-        if return_code != 0:
-            self.debug("Command failed. Stderr:\n" + '\n'.join(stderr))
-            raise Exception("Failed to measure, Locust failed with exit code: " + str(return_code))
+        # Never return Error
+        # if return_code != 0:
+        #     self.debug("Command failed. Stderr:\n" + '\n'.join(stderr))
+        #     raise Exception("Failed to measure, Locust failed with exit code: " + str(return_code))
 
     # helper:  update timer based progress
     def _update_timed_progress(self, t_start, t_limit, prog_start, prog_coefficient):
